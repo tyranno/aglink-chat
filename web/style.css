@@ -38,6 +38,7 @@ header .icon-button { background: transparent; border-color: rgba(255, 255, 255,
 .topic-title { font-size: 13px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .topic-summary { font-size: 12px; color: #475569; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .topic-empty { padding: 8px; color: #64748b; font-size: 13px; }
+.telegram-topic { border-bottom: 1px solid #cbd5e1; }
 .topic-section-toggle { width: 100%; padding: 5px 8px; border: 0; border-radius: 6px; background: transparent; color: #64748b; text-align: left; font-size: 12px; font-weight: 600; cursor: pointer; }
 .topic-section-toggle:hover { background: #e2e8f0; color: #334155; }
 .topic-section { display: flex; flex-direction: column; gap: 4px; margin-top: 2px; }

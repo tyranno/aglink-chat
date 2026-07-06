@@ -24,6 +24,9 @@
   const workingEl = document.getElementById("working");
   const workingLabel = document.getElementById("working-label");
   let ws, backoff = 500;
+  // Which stream the composer currently targets: the single Telegram stream,
+  // or a specific web-created topic. Defaults to Telegram until a topic is picked.
+  let currentTarget = { kind: "telegram" };
 
   if (attachBtn) attachBtn.addEventListener("click", () => fileEl.click());
   if (fileEl) fileEl.addEventListener("change", () => {
@@ -96,8 +99,48 @@
   function sendText(text, echo) {
     if (!text || !ws || ws.readyState !== WebSocket.OPEN) return false;
     if (echo) add("user", text);
-    ws.send(JSON.stringify({ type: "send", text }));
+    ws.send(JSON.stringify({ type: "send", text, target: currentTarget }));
     return true;
+  }
+
+  // Load and render stored history for a target, then hand off to the live
+  // stream (frames keep appending after this). Falls back silently on error
+  // so whatever is already shown stays put.
+  async function selectTarget(tgt) {
+    currentTarget = tgt;
+    try {
+      const qs = tgt.kind === "telegram"
+        ? "kind=telegram"
+        : "kind=web&project=" + encodeURIComponent(tgt.project) + "&id=" + encodeURIComponent(tgt.id);
+      const resp = await fetch("/api/history?" + qs, { headers: { Authorization: "Bearer " + token } });
+      if (resp.ok) {
+        const data = await resp.json();
+        log.replaceChildren();
+        for (const turn of (data.turns || [])) {
+          add(turn.role === "user" ? "user" : "assistant", turn.text);
+        }
+      }
+    } catch (e) { /* keep whatever is shown; live continues */ }
+    loadConversations(); // refresh highlight (and #current-topic header)
+  }
+
+  function makeTelegramButton(tg) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "topic telegram-topic";
+    if (currentTarget.kind === "telegram") button.classList.add("active");
+    const title = document.createElement("span");
+    title.className = "topic-title";
+    title.textContent = "📱 " + (tg.title || "텔레그램 대화");
+    button.appendChild(title);
+    if (tg.project) {
+      const sub = document.createElement("span");
+      sub.className = "topic-summary";
+      sub.textContent = "작업: " + tg.project;
+      button.appendChild(sub);
+    }
+    button.addEventListener("click", () => selectTarget({ kind: "telegram" }));
+    return button;
   }
 
   function makeConvButton(project, conv) {
@@ -120,10 +163,10 @@
     }
 
     button.addEventListener("click", () => {
-      if (!conv.id || conv.active) return;
-      if (sendText("!chat use " + project.name + " " + conv.id, true)) {
-        window.setTimeout(loadConversations, 500);
-      }
+      if (!conv.id) return;
+      // Keep the shared active pointer in sync for the sidebar highlight.
+      sendText("!chat use " + project.name + " " + conv.id, false);
+      selectTarget({ kind: "web", project: project.name, id: conv.id });
     });
     return button;
   }
@@ -131,6 +174,10 @@
   function renderConversations(data) {
     if (!topicList) return;
     topicList.replaceChildren();
+
+    if (data && data.telegram) {
+      topicList.appendChild(makeTelegramButton(data.telegram));
+    }
 
     const activeProject = data && data.active && data.active.project;
     const projects = Array.isArray(data && data.projects) ? data.projects : [];
@@ -280,7 +327,7 @@
   function connect() {
     const scheme = location.protocol === "https:" ? "wss" : "ws";
     ws = new WebSocket(`${scheme}://${location.host}/ws?token=${encodeURIComponent(token)}`);
-    ws.onopen = () => { statusEl.textContent = "연결됨"; statusEl.className = "on"; backoff = 500; loadConversations(); };
+    ws.onopen = () => { statusEl.textContent = "연결됨"; statusEl.className = "on"; backoff = 500; selectTarget(currentTarget); };
     ws.onclose = () => {
       statusEl.textContent = "연결 끊김"; statusEl.className = "off";
       hideWorking();
