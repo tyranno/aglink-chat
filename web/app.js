@@ -24,9 +24,10 @@
   const workingEl = document.getElementById("working");
   const workingLabel = document.getElementById("working-label");
   let ws, backoff = 500;
-  // Which stream the composer currently targets: the single Telegram stream,
-  // or a specific web-created topic. Defaults to Telegram until a topic is picked.
-  let currentTarget = { kind: "telegram" };
+  // Which stream the composer currently targets: a specific web conversation,
+  // or (only if explicitly picked) the single Telegram stream. Web starts with
+  // no target until an active web conversation is found or the user picks one.
+  let currentTarget = null;
 
   if (attachBtn) attachBtn.addEventListener("click", () => fileEl.click());
   if (fileEl) fileEl.addEventListener("change", () => {
@@ -97,7 +98,12 @@
   }
 
   function sendText(text, echo) {
-    if (!text || !ws || ws.readyState !== WebSocket.OPEN) return false;
+    if (!text) return false;
+    if (!currentTarget) {
+      add("system", "먼저 대화를 선택하거나 ＋로 새 대화를 만들어 주세요.");
+      return false;
+    }
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
     if (echo) add("user", text);
     ws.send(JSON.stringify({ type: "send", text, target: currentTarget }));
     return true;
@@ -111,7 +117,7 @@
     try {
       const qs = tgt.kind === "telegram"
         ? "kind=telegram"
-        : "kind=web&project=" + encodeURIComponent(tgt.project) + "&id=" + encodeURIComponent(tgt.id);
+        : "kind=web&id=" + encodeURIComponent(tgt.id);
       const resp = await fetch("/api/history?" + qs, { headers: { Authorization: "Bearer " + token } });
       if (resp.ok) {
         const data = await resp.json();
@@ -128,7 +134,7 @@
     const button = document.createElement("button");
     button.type = "button";
     button.className = "topic telegram-topic";
-    if (currentTarget.kind === "telegram") button.classList.add("active");
+    if (currentTarget && currentTarget.kind === "telegram") button.classList.add("active");
     const title = document.createElement("span");
     title.className = "topic-title";
     title.textContent = "📱 " + (tg.title || "텔레그램 대화");
@@ -140,6 +146,46 @@
       button.appendChild(sub);
     }
     button.addEventListener("click", () => selectTarget({ kind: "telegram" }));
+    return button;
+  }
+
+  // Top-level web conversations (per-conversation workDir, web-first flow).
+  // Distinct from the legacy project-topic buttons below.
+  function makeWebConvButton(wc) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "topic";
+    if (currentTarget && currentTarget.kind === "web" && currentTarget.id === wc.id) button.classList.add("active");
+    button.dataset.id = wc.id;
+    const title = document.createElement("span");
+    title.className = "topic-title";
+    title.textContent = wc.title || wc.id;
+    button.appendChild(title);
+    if (wc.workDir) {
+      const sub = document.createElement("span");
+      sub.className = "topic-summary";
+      sub.textContent = "📁 " + wc.workDir;
+      button.appendChild(sub);
+    }
+    button.addEventListener("click", (e) => {
+      if (e.target && e.target.dataset && e.target.dataset.gear) return;
+      selectTarget({ kind: "web", id: wc.id });
+    });
+    const gear = document.createElement("span");
+    gear.textContent = "⚙";
+    gear.dataset.gear = "1";
+    gear.style.cursor = "pointer";
+    gear.style.marginLeft = "6px";
+    gear.title = "작업 폴더 설정";
+    gear.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      const path = prompt("이 대화의 작업 폴더 경로:", wc.workDir || "");
+      if (path && ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "web_setdir", id: wc.id, path: path }));
+        window.setTimeout(loadConversations, 400);
+      }
+    });
+    button.appendChild(gear);
     return button;
   }
 
@@ -177,6 +223,10 @@
 
     if (data && data.telegram) {
       topicList.appendChild(makeTelegramButton(data.telegram));
+    }
+
+    if (data && Array.isArray(data.webConvs)) {
+      for (const wc of data.webConvs) topicList.appendChild(makeWebConvButton(wc));
     }
 
     const activeProject = data && data.active && data.active.project;
@@ -314,6 +364,10 @@
       const data = await resp.json();
       renderConversations(data);
       updateCurrentTopic(data);
+      if (!currentTarget) {
+        const act = (data.webConvs || []).find((w) => w.active);
+        if (act) selectTarget({ kind: "web", id: act.id });
+      }
     } catch (err) {
       if (!topicList) return;
       topicList.replaceChildren();
@@ -327,7 +381,7 @@
   function connect() {
     const scheme = location.protocol === "https:" ? "wss" : "ws";
     ws = new WebSocket(`${scheme}://${location.host}/ws?token=${encodeURIComponent(token)}`);
-    ws.onopen = () => { statusEl.textContent = "연결됨"; statusEl.className = "on"; backoff = 500; selectTarget(currentTarget); };
+    ws.onopen = () => { statusEl.textContent = "연결됨"; statusEl.className = "on"; backoff = 500; loadConversations(); };
     ws.onclose = () => {
       statusEl.textContent = "연결 끊김"; statusEl.className = "off";
       hideWorking();
@@ -377,8 +431,19 @@
   });
   if (refreshTopics) refreshTopics.addEventListener("click", loadConversations);
   if (newChat) newChat.addEventListener("click", () => {
-    // A web-created chat is managed only in the web sidebar (origin=web tagging).
-    if (sendText("!chat new", true)) window.setTimeout(loadConversations, 500);
+    const title = prompt("새 대화 제목 (선택):", "") || "";
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: "web_new", title: title }));
+    // After creation, refresh and select the newest web conv.
+    window.setTimeout(async () => {
+      await loadConversations();
+      // pick the most-recent web conv as the new target
+      try {
+        const resp = await fetch("/api/conversations", { headers: { Authorization: "Bearer " + token } });
+        const data = await resp.json();
+        if (data.webConvs && data.webConvs.length) selectTarget({ kind: "web", id: data.webConvs[0].id });
+      } catch (e) { /* ignore; sidebar will still refresh on next loadConversations */ }
+    }, 400);
   });
   resizeInput();
   loadConversations();
