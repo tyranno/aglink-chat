@@ -25,9 +25,9 @@
   const workingLabel = document.getElementById("working-label");
   let ws, backoff = 500;
   // Which stream the composer currently targets: a specific web conversation,
-  // or (only if explicitly picked) the single Telegram stream. Web starts with
-  // no target until an active web conversation is found or the user picks one.
-  let currentTarget = null;
+  // Telegram is the always-present default channel; web conversations are
+  // additional channels the user selects or creates.
+  let currentTarget = { kind: "telegram" };
 
   if (attachBtn) attachBtn.addEventListener("click", () => fileEl.click());
   if (fileEl) fileEl.addEventListener("change", () => {
@@ -284,7 +284,7 @@
   function connect() {
     const scheme = location.protocol === "https:" ? "wss" : "ws";
     ws = new WebSocket(`${scheme}://${location.host}/ws?token=${encodeURIComponent(token)}`);
-    ws.onopen = () => { statusEl.textContent = "연결됨"; statusEl.className = "on"; backoff = 500; loadConversations(); };
+    ws.onopen = () => { statusEl.textContent = "연결됨"; statusEl.className = "on"; backoff = 500; selectTarget(currentTarget); };
     ws.onclose = () => {
       statusEl.textContent = "연결 끊김"; statusEl.className = "off";
       hideWorking();
