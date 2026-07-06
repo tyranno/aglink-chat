@@ -189,34 +189,6 @@
     return button;
   }
 
-  function makeConvButton(project, conv) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "topic";
-    if (conv.active) button.classList.add("active");
-    button.dataset.id = conv.id || "";
-
-    const title = document.createElement("span");
-    title.className = "topic-title";
-    title.textContent = conv.title || conv.id || "제목 없음";
-    button.appendChild(title);
-
-    if (conv.summary) {
-      const summary = document.createElement("span");
-      summary.className = "topic-summary";
-      summary.textContent = conv.summary;
-      button.appendChild(summary);
-    }
-
-    button.addEventListener("click", () => {
-      if (!conv.id) return;
-      // Keep the shared active pointer in sync for the sidebar highlight.
-      sendText("!chat use " + project.name + " " + conv.id, false);
-      selectTarget({ kind: "web", project: project.name, id: conv.id });
-    });
-    return button;
-  }
-
   function renderConversations(data) {
     if (!topicList) return;
     topicList.replaceChildren();
@@ -225,96 +197,27 @@
       topicList.appendChild(makeTelegramButton(data.telegram));
     }
 
-    if (data && Array.isArray(data.webConvs)) {
-      for (const wc of data.webConvs) topicList.appendChild(makeWebConvButton(wc));
-    }
-
-    const activeProject = data && data.active && data.active.project;
-    const projects = Array.isArray(data && data.projects) ? data.projects : [];
-    if (projects.length === 0) {
+    const webConvs = Array.isArray(data && data.webConvs) ? data.webConvs : [];
+    if (webConvs.length === 0) {
       const empty = document.createElement("div");
       empty.className = "topic-empty";
-      empty.textContent = "대화가 없습니다";
+      empty.textContent = "＋로 새 대화를 만들어 보세요";
       topicList.appendChild(empty);
       return;
     }
 
-    const projectsToRender = projects.slice().sort((a, b) => {
-      if (a.name === activeProject) return -1;
-      if (b.name === activeProject) return 1;
-      return (a.name || "").localeCompare(b.name || "");
-    });
-
-    for (const project of projectsToRender) {
-      const conversations = Array.isArray(project.conversations) ? project.conversations : [];
-      const group = document.createElement("section");
-      group.className = "topic-group";
-
-      const head = document.createElement("div");
-      head.className = "topic-project";
-      if (project.name === activeProject) head.classList.add("active");
-
-      const name = document.createElement("span");
-      name.className = "topic-project-name";
-      name.textContent = project.name || "프로젝트";
-      head.appendChild(name);
-
-      const count = document.createElement("span");
-      count.className = "topic-project-count";
-      count.textContent = String(conversations.length);
-      head.appendChild(count);
-      group.appendChild(head);
-
-      if (conversations.length === 0) {
-        const empty = document.createElement("div");
-        empty.className = "topic-empty";
-        empty.textContent = "대화 없음";
-        group.appendChild(empty);
-        topicList.appendChild(group);
-        continue;
-      }
-
-      // Web-created chats and the shared active conversation are shown by default;
-      // other (telegram/legacy) conversations tuck behind a toggle so the web
-      // sidebar isn't cluttered with chats made from Telegram.
-      const webConvs = [];
-      const tgConvs = [];
-      for (const conv of conversations) {
-        if (conv.active || conv.channel === "web") webConvs.push(conv);
-        else tgConvs.push(conv);
-      }
-
-      for (const conv of webConvs) group.appendChild(makeConvButton(project, conv));
-
-      if (tgConvs.length > 0) {
-        let open = false;
-        const holder = document.createElement("div");
-        holder.className = "topic-section";
-        holder.hidden = true;
-        for (const conv of tgConvs) holder.appendChild(makeConvButton(project, conv));
-
-        const toggle = document.createElement("button");
-        toggle.type = "button";
-        toggle.className = "topic-section-toggle";
-        const label = () => (open ? "▾ " : "▸ ") + "텔레그램 대화 (" + tgConvs.length + ")";
-        toggle.textContent = label();
-        toggle.addEventListener("click", () => {
-          open = !open;
-          holder.hidden = !open;
-          toggle.textContent = label();
-        });
-        group.appendChild(toggle);
-        group.appendChild(holder);
-      }
-
-      topicList.appendChild(group);
-    }
+    for (const wc of webConvs) topicList.appendChild(makeWebConvButton(wc));
   }
 
-  // Locate the active conversation in a list_conversations payload: prefer the
-  // explicit active ref (project + conversationId), fall back to the per-conv
-  // active flag. Returns { project, conv } or null.
+  // Locate the active conversation for the #current-topic header. Prefers an
+  // active top-level web conversation (web-first flow; no project), falls
+  // back to the legacy project/telegram active ref, then the per-conv active
+  // flag. Returns { project, conv } or null.
   function findActiveConversation(data) {
+    const webConvs = Array.isArray(data && data.webConvs) ? data.webConvs : [];
+    const activeWeb = webConvs.find((w) => w.active);
+    if (activeWeb) return { project: "", conv: activeWeb };
+
     const projects = Array.isArray(data && data.projects) ? data.projects : [];
     const activeProject = data && data.active && data.active.project;
     const activeId = data && data.active && data.active.conversationId;
