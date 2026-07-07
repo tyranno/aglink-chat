@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"embed"
 	"encoding/hex"
+	"encoding/json"
 	"io/fs"
 	"log"
 	"net"
@@ -76,8 +77,12 @@ type browserServer struct {
 
 // browserMsg is a message from a browser (same shape as teleclaude's web UI sends).
 type browserMsg struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type   string          `json:"type"`
+	Text   string          `json:"text"`
+	ID     string          `json:"id,omitempty"`
+	Title  string          `json:"title,omitempty"`
+	Path   string          `json:"path,omitempty"`
+	Target json.RawMessage `json:"target,omitempty"`
 }
 
 func (s *browserServer) tokenOK(r *http.Request) bool {
@@ -147,8 +152,17 @@ func (s *browserServer) handleWS(w http.ResponseWriter, r *http.Request) {
 		if rerr := wsjson.Read(ctx, c, &m); rerr != nil {
 			break
 		}
-		if m.Type == "send" {
+		switch m.Type {
+		case "send":
 			s.forwardSend(m.Text)
+		case "web_new":
+			_ = s.control.send(controlIn{Type: "web_new", Title: m.Title, Origin: "web"})
+		case "web_setdir":
+			_ = s.control.send(controlIn{Type: "web_setdir", ID: m.ID, Path: m.Path, Origin: "web"})
+		case "web_rename":
+			_ = s.control.send(controlIn{Type: "web_rename", ID: m.ID, Title: m.Title, Origin: "web"})
+		case "web_delete":
+			_ = s.control.send(controlIn{Type: "web_delete", ID: m.ID, Origin: "web"})
 		}
 	}
 	cancel()
@@ -187,6 +201,30 @@ func (s *browserServer) handleConversations(w http.ResponseWriter, r *http.Reque
 	_, _ = w.Write(data)
 }
 
+// handleHistory proxies the browser's stored-history request to teleclaude's
+// control API (get_history), matching the embedded server's /api/history so the
+// shared app.js works identically here.
+func (s *browserServer) handleHistory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet || !s.authOK(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	kind := r.URL.Query().Get("kind")
+	if kind == "" {
+		kind = "telegram"
+	}
+	tgt, _ := json.Marshal(map[string]string{
+		"kind": kind, "project": r.URL.Query().Get("project"), "id": r.URL.Query().Get("id"),
+	})
+	data, err := s.control.request(controlIn{Type: "get_history", Target: json.RawMessage(tgt)})
+	if err != nil {
+		http.Error(w, "control API error", http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_, _ = w.Write(data)
+}
+
 func (s *browserServer) handleUpload(w http.ResponseWriter, r *http.Request) {
 	// Next round: save the multipart file to disk, then control upload_attachment
 	// {path,caption}. Kept a clean 501 for now so the roundtrip milestone is minimal.
@@ -215,6 +253,7 @@ func (s *browserServer) Start() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", s.handleWS)
 	mux.HandleFunc("/api/conversations", s.handleConversations)
+	mux.HandleFunc("/api/history", s.handleHistory)
 	mux.HandleFunc("/api/upload", s.handleUpload)
 	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticSub))))
 	mux.HandleFunc("/", s.handleIndex)

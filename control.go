@@ -34,13 +34,16 @@ type controlOut struct {
 
 // controlIn is what we send to teleclaude's control API.
 type controlIn struct {
-	Type    string `json:"type"`
-	ReqID   string `json:"reqID,omitempty"`
-	ChatID  int64  `json:"chatID,omitempty"`
-	Text    string `json:"text,omitempty"`
-	Origin  string `json:"origin,omitempty"`
-	Path    string `json:"path,omitempty"`
-	Caption string `json:"caption,omitempty"`
+	Type    string          `json:"type"`
+	ReqID   string          `json:"reqID,omitempty"`
+	ChatID  int64           `json:"chatID,omitempty"`
+	Text    string          `json:"text,omitempty"`
+	Origin  string          `json:"origin,omitempty"`
+	Path    string          `json:"path,omitempty"`
+	Caption string          `json:"caption,omitempty"`
+	ID      string          `json:"id,omitempty"`
+	Title   string          `json:"title,omitempty"`
+	Target  json.RawMessage `json:"target,omitempty"`
 }
 
 // controlClient maintains one connection to teleclaude's loopback control API,
