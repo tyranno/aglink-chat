@@ -34,7 +34,6 @@
   const versionBadge = document.getElementById("version-badge");
   const btnConfig = document.getElementById("btn-config");
   const btnConnections = document.getElementById("btn-connections");
-  const btnUpdate = document.getElementById("btn-update");
   const configOverlay = document.getElementById("config-overlay");
   const configText = document.getElementById("config-text");
   const configMsg = document.getElementById("config-msg");
@@ -69,11 +68,13 @@
     workingTimer = setInterval(() => {
       if (workingLabel) workingLabel.textContent = workingElapsedText();
     }, 1000);
+    scrollToBottom(); // the indicator shrinks the log; keep the newest message visible
   }
   function hideWorking() {
     if (!workingEl) return;
     if (workingTimer) { clearInterval(workingTimer); workingTimer = null; }
     workingEl.hidden = true;
+    scrollToBottom();
   }
 
   function applySidebarHidden(hidden) {
@@ -91,12 +92,23 @@
     });
   }
 
+  // Scroll the log to the very bottom AFTER the browser has laid out the new
+  // content. A synchronous scrollTop set can run before reflow (and before the
+  // #working indicator toggles resize the log), leaving the newest message
+  // partly clipped — a double rAF guarantees layout is settled first.
+  function scrollToBottom() {
+    if (!log) return;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => { log.scrollTop = log.scrollHeight; });
+    });
+  }
+
   function add(role, text) {
     const d = document.createElement("div");
     d.className = "msg " + role;
     d.textContent = text;
     log.appendChild(d);
-    log.scrollTop = log.scrollHeight;
+    scrollToBottom();
     return d;
   }
   function addImage(caption, b64) {
@@ -105,9 +117,10 @@
     if (caption) { const c = document.createElement("div"); c.textContent = caption; d.appendChild(c); }
     const img = document.createElement("img");
     img.src = "data:image/png;base64," + b64;
+    img.addEventListener("load", scrollToBottom); // image height is unknown until decoded
     d.appendChild(img);
     log.appendChild(d);
-    log.scrollTop = log.scrollHeight;
+    scrollToBottom();
   }
 
   function resizeInput() {
@@ -415,14 +428,9 @@
     } catch (e) { /* admin UI stays hidden */ }
   }
 
-  if (btnUpdate) btnUpdate.addEventListener("click", () => {
-    if (!window.confirm("새 버전을 빌드하고 재시작할까요? 진행 중 작업이 없어야 합니다.")) return;
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      // Reuse the existing authenticated command path — same as typing !update.
-      ws.send(JSON.stringify({ type: "send", text: "!update", target: currentTarget || { kind: "telegram" } }));
-      add("system", "업데이트를 요청했습니다. 빌드/재시작 로그가 곧 표시됩니다.");
-    }
-  });
+  // Note: the !update command still exists on the backend (type via chat or
+  // Telegram); the header trigger button was removed per feedback — it is a
+  // dev-time action, not needed in normal use.
 
   async function openConfig() {
     if (!configOverlay) return;
@@ -448,31 +456,62 @@
   if (configSaveBtn) configSaveBtn.addEventListener("click", saveConfig);
   if (configOverlay) configOverlay.addEventListener("click", (e) => { if (e.target === configOverlay) configOverlay.hidden = true; });
 
+  function connHeading(text) {
+    const h = document.createElement("div");
+    h.className = "conn-heading";
+    h.textContent = text;
+    return h;
+  }
+  function connRow(k, v, cls) {
+    const row = document.createElement("div"); row.className = "conn-row";
+    const kk = document.createElement("span"); kk.className = "k"; kk.textContent = k;
+    const vv = document.createElement("span"); if (cls) vv.className = cls; vv.textContent = v;
+    row.append(kk, vv);
+    return row;
+  }
+  function connNote(text) {
+    const n = document.createElement("div"); n.className = "topic-summary"; n.textContent = text;
+    return n;
+  }
   async function openConnections() {
     if (!connOverlay || !connBody) return;
     connBody.replaceChildren();
     let data = {};
     try { const resp = await fetch("/api/status", { headers: authHeaders }); if (resp.ok) data = await resp.json(); } catch (e) { /* show defaults */ }
-    const rows = [
-      ["웹 채팅 주소", data.webChatAddr || "(미설정)"],
-      ["제어 API 사용", data.chatControlEnabled ? "켜짐" : "꺼짐"],
-      ["제어 API 주소", data.chatControlAddr || "(미설정)"],
-    ];
-    for (const [k, v] of rows) {
-      const row = document.createElement("div"); row.className = "conn-row";
-      const kk = document.createElement("span"); kk.className = "k"; kk.textContent = k;
-      const vv = document.createElement("span"); vv.textContent = v;
-      row.append(kk, vv); connBody.appendChild(row);
+
+    // This web server — if you can read this panel, it is up. Shown first so the
+    // aglink-chat row below is never mistaken for "is this page working?".
+    connBody.appendChild(connHeading("이 웹 서버 (지금 보고 있는 화면)"));
+    connBody.appendChild(connRow("상태", "정상 동작 중", "conn-ok"));
+    connBody.appendChild(connRow("웹 채팅 주소", data.webChatAddr || "(미설정)"));
+
+    // External aglink-chat relay process — a SEPARATE program that connects to
+    // the control API. "연결 안 됨" here does NOT mean this page is broken.
+    connBody.appendChild(connHeading("aglink-chat 릴레이 (별도 프로세스)"));
+    connBody.appendChild(connRow("제어 API", data.chatControlEnabled ? "켜짐" : "꺼짐"));
+    connBody.appendChild(connRow("제어 API 주소", data.chatControlAddr || "(미설정)"));
+    connBody.appendChild(connRow(
+      "릴레이 프로세스 접속",
+      data.aglinkConnected ? ("접속됨 (" + (data.aglinkClients || 0) + "개)") : "접속 없음",
+      data.aglinkConnected ? "conn-ok" : "conn-off"));
+    connBody.appendChild(connNote("이 항목은 별도 aglink-chat 프로그램이 제어 API로 붙어 있는지 여부입니다. 이 웹페이지 동작과는 무관합니다."));
+
+    // aglink-* control plugins (aglink-screen / aglink-web) — rebuilt by !update.
+    connBody.appendChild(connHeading("aglink 플러그인"));
+    let plugins = [];
+    try { const presp = await fetch("/api/plugins", { headers: authHeaders }); if (presp.ok) plugins = (await presp.json()).plugins || []; } catch (e) { /* none */ }
+    if (plugins.length === 0) {
+      connBody.appendChild(connNote("플러그인 정보를 불러오지 못했습니다."));
+    } else {
+      for (const p of plugins) {
+        let val, cls;
+        if (!p.installed) { val = "설치 안 됨"; cls = "conn-off"; }
+        else { val = (p.version ? p.version : "설치됨") + (p.binary ? " · 빌드 있음" : " · 빌드 없음"); cls = "conn-ok"; }
+        connBody.appendChild(connRow(p.name, val, cls));
+      }
     }
-    const arow = document.createElement("div"); arow.className = "conn-row";
-    const ak = document.createElement("span"); ak.className = "k"; ak.textContent = "aglink-chat 연동";
-    const av = document.createElement("span");
-    av.className = data.aglinkConnected ? "conn-ok" : "conn-off";
-    av.textContent = data.aglinkConnected ? ("연결됨 (" + (data.aglinkClients || 0) + ")") : "연결 안 됨";
-    arow.append(ak, av); connBody.appendChild(arow);
-    const note = document.createElement("div"); note.className = "topic-summary";
-    note.textContent = "주소/포트 변경은 ⚙ 설정에서 config.yaml을 편집한 뒤 재시작하세요.";
-    connBody.appendChild(note);
+
+    connBody.appendChild(connNote("주소/포트 변경은 ⚙ 설정에서 config.yaml을 편집한 뒤 재시작하세요."));
     connOverlay.hidden = false;
   }
   if (btnConnections) btnConnections.addEventListener("click", openConnections);
