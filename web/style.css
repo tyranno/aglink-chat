@@ -23,7 +23,8 @@ header .icon-button { background: transparent; border-color: rgba(255, 255, 255,
 #status.off { background: #dc2626; }
 #admin-controls { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; }
 #admin-controls[hidden] { display: none; }
-.version-badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: rgba(255, 255, 255, 0.18); color: #e2e8f0; font-weight: 600; white-space: nowrap; }
+.version-badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: rgba(255, 255, 255, 0.18); color: #e2e8f0; font-weight: 600; white-space: nowrap; cursor: default; }
+.version-badge.update-available { background: #f59e0b; color: #1f2937; }
 #shell { flex: 1; min-height: 0; display: grid; grid-template-columns: 280px minmax(0, 1fr); }
 #shell.sidebar-hidden { grid-template-columns: minmax(0, 1fr); }
 #shell.sidebar-hidden #topics { display: none; }

@@ -417,6 +417,25 @@
 
   // --- Admin surface (Teleclaude embedded only) -----------------------------
 
+  // Render the header version badge from a version payload (/api/capabilities or
+  // /api/version). Shows the running version, turns amber with a ▲ when the
+  // running build is behind the source tree, and puts full detail in the tooltip.
+  function renderVersionBadge(v) {
+    if (!versionBadge || !v) return;
+    const running = v.version || "?";
+    versionBadge.textContent = running + (v.updateAvailable ? " ▲" : "");
+    versionBadge.classList.toggle("update-available", !!v.updateAvailable);
+    let tip = "실행 중: " + running;
+    if (v.commit) tip += " (" + v.commit + ")";
+    if (v.buildTime) tip += " · " + v.buildTime;
+    if (v.latestVersion) {
+      tip += "\n최신 소스: " + v.latestVersion;
+      if (v.latestCommit) tip += " (" + v.latestCommit + ")";
+      tip += v.updateAvailable ? " → 업데이트 필요" : " (동일)";
+    }
+    versionBadge.title = tip;
+  }
+
   async function bootstrapCapabilities() {
     try {
       const resp = await fetch("/api/capabilities", { headers: authHeaders });
@@ -424,7 +443,7 @@
       const cap = await resp.json();
       if (!cap.admin) return;
       if (adminControls) adminControls.hidden = false;
-      if (versionBadge) versionBadge.textContent = "v " + (cap.version || "?");
+      renderVersionBadge(cap);
     } catch (e) { /* admin UI stays hidden */ }
   }
 
@@ -478,6 +497,23 @@
     connBody.replaceChildren();
     let data = {};
     try { const resp = await fetch("/api/status", { headers: authHeaders }); if (resp.ok) data = await resp.json(); } catch (e) { /* show defaults */ }
+
+    // Version: running build vs latest source, so "update needed" is obvious.
+    let ver = {};
+    try { const vr = await fetch("/api/version", { headers: authHeaders }); if (vr.ok) ver = await vr.json(); } catch (e) { /* skip */ }
+    connBody.appendChild(connHeading("버전"));
+    connBody.appendChild(connRow("실행 중", (ver.version || "?") + (ver.commit ? " (" + ver.commit + ")" : "")));
+    if (ver.latestVersion) {
+      connBody.appendChild(connRow("최신 소스", ver.latestVersion + (ver.latestCommit ? " (" + ver.latestCommit + ")" : "")));
+      const behind = (ver.latestCommitCount || 0) - (ver.commitCount || 0);
+      if (ver.updateAvailable) {
+        connBody.appendChild(connRow("상태", "업데이트 필요 (" + behind + "커밋 뒤처짐)", "conn-off"));
+      } else {
+        connBody.appendChild(connRow("상태", "최신", "conn-ok"));
+      }
+    }
+    if (ver.buildTime) connBody.appendChild(connNote("빌드 시각: " + ver.buildTime));
+    renderVersionBadge(ver); // keep the header badge in sync with fresh data
 
     // This web server — if you can read this panel, it is up. Shown first so the
     // aglink-chat row below is never mistaken for "is this page working?".
