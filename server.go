@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
@@ -397,7 +398,16 @@ func (s *browserServer) handleIndex(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "ui missing", http.StatusInternalServerError)
 		return
 	}
+	// Inject the current valid token so the page authenticates regardless of the
+	// URL's ?token=, stale localStorage, or which loopback host was opened —
+	// critical after the frontend swap so a browser that was on teleclaude's
+	// embedded server keeps working. Loopback-only + same-origin (CORS) keeps the
+	// token unreadable to cross-origin pages. json.Marshal escapes it for <script>.
+	tokJSON, _ := json.Marshal(s.token)
+	inject := []byte("<script>window.__TC_TOKEN__=" + string(tokJSON) + ";</script></head>")
+	b = bytes.Replace(b, []byte("</head>"), inject, 1)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store, must-revalidate")
 	_, _ = w.Write(b)
 }
 
@@ -406,6 +416,15 @@ func (s *browserServer) Start() error {
 	if err != nil {
 		return err
 	}
+	// noStore forces the browser to refetch web assets so a normal refresh never
+	// runs stale app.js against a freshly deployed server.
+	noStore := func(h http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Cache-Control", "no-store, must-revalidate")
+			h.ServeHTTP(w, r)
+		})
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", s.handleWS)
 	mux.HandleFunc("/api/conversations", s.handleConversations)
@@ -416,7 +435,7 @@ func (s *browserServer) Start() error {
 	mux.HandleFunc("/api/aux", s.handleAux)
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/config", s.handleConfig)
-	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticSub))))
+	mux.Handle("/static/", noStore(http.StripPrefix("/static/", http.FileServer(http.FS(staticSub)))))
 	mux.HandleFunc("/", s.handleIndex)
 
 	ln, err := net.Listen("tcp", s.addr)
@@ -425,7 +444,34 @@ func (s *browserServer) Start() error {
 	}
 	log.Printf("[aglink-chat] browser UI on http://%s/?token=%s", s.addr, s.token)
 	srv := &http.Server{Handler: mux}
+
+	// Also serve the IPv6 loopback (::1) so a browser that resolves "localhost" to
+	// IPv6 — common on Windows/Chrome — can connect. Best-effort: IPv4 still works
+	// if this bind fails (e.g. IPv6 disabled). Mirrors teleclaude's old server so
+	// an already-open tab reconnects seamlessly after the frontend swap.
+	if v6 := ipv6LoopbackAddr(s.addr); v6 != "" {
+		if ln6, err6 := net.Listen("tcp", v6); err6 != nil {
+			log.Printf("[aglink-chat] IPv6 loopback %s not bound: %v (IPv4 still served)", v6, err6)
+		} else {
+			log.Printf("[aglink-chat] also http://%s/", v6)
+			go func() { _ = srv.Serve(ln6) }()
+		}
+	}
+
 	return srv.Serve(ln)
+}
+
+// ipv6LoopbackAddr returns the "[::1]:port" form of an IPv4-loopback / localhost
+// listen address, or "" if addr is not one we should mirror onto IPv6.
+func ipv6LoopbackAddr(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return ""
+	}
+	if host == "127.0.0.1" || strings.EqualFold(host, "localhost") {
+		return net.JoinHostPort("::1", port)
+	}
+	return ""
 }
 
 func genToken() string {
