@@ -36,22 +36,13 @@
         <span class="dot"></span><span class="dot"></span><span class="dot"></span>
         <span id="working-label">작업 진행 중…</span>
       </div>
-      <button type="button" id="compose-fab" class="fab" title="메시지 작성" aria-label="메시지 작성">✎</button>
-      <div id="composer-overlay" class="overlay" hidden>
-        <form id="composer" class="composer-modal">
-          <div class="composer-head">
-            <span>메시지 작성</span>
-            <button type="button" id="composer-close" class="icon-button" title="닫기" aria-label="닫기">✕</button>
-          </div>
-          <div class="composer-row">
-            <button type="button" id="attach-btn" class="icon-button" title="파일 첨부" aria-label="파일 첨부">📎</button>
-            <input id="file" type="file" hidden />
-            <span id="file-name" hidden></span>
-            <textarea id="input" rows="1" autocomplete="off" spellcheck="false" placeholder="메시지 또는 !명령…"></textarea>
-            <button type="submit" id="send-btn" class="icon-button" title="전송" aria-label="전송">➤</button>
-          </div>
-        </form>
-      </div>
+      <form id="composer">
+        <button type="button" id="attach-btn" class="icon-button" title="파일 첨부" aria-label="파일 첨부">📎</button>
+        <input id="file" type="file" hidden />
+        <span id="file-name" hidden></span>
+        <textarea id="input" rows="1" autocomplete="off" spellcheck="false" placeholder="메시지 또는 !명령…"></textarea>
+        <button type="submit" id="send-btn" class="icon-button" title="전송" aria-label="전송">➤</button>
+      </form>
     </section>
   </div>
   <div id="config-overlay" class="overlay" hidden>

@@ -25,11 +25,7 @@
   const toggleSidebar = document.getElementById("toggle-sidebar");
   const workingEl = document.getElementById("working");
   const workingLabel = document.getElementById("working-label");
-  // Composer (floating button → modal).
-  const composerFab = document.getElementById("compose-fab");
-  const composerOverlay = document.getElementById("composer-overlay");
-  const composerClose = document.getElementById("composer-close");
-  // Admin surface (Teleclaude embedded only; shown after capability probe).
+  // Admin surface (shown after capability probe).
   const adminControls = document.getElementById("admin-controls");
   const versionBadge = document.getElementById("version-badge");
   const btnConfig = document.getElementById("btn-config");
@@ -129,24 +125,9 @@
     input.style.height = input.scrollHeight + "px";
   }
 
-  // Composer modal control.
-  function openComposer() {
-    if (!composerOverlay) return;
-    composerOverlay.hidden = false;
-    if (input) { input.focus(); resizeInput(); }
-  }
-  function closeComposer() {
-    if (!composerOverlay) return;
-    composerOverlay.hidden = true;
-  }
-  if (composerFab) composerFab.addEventListener("click", openComposer);
-  if (composerClose) composerClose.addEventListener("click", closeComposer);
-  if (composerOverlay) composerOverlay.addEventListener("click", (e) => {
-    if (e.target === composerOverlay) closeComposer();
-  });
+  // Esc closes the admin panels (config / connections).
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;
-    closeComposer();
     if (configOverlay) configOverlay.hidden = true;
     if (connOverlay) connOverlay.hidden = true;
   });
@@ -379,7 +360,6 @@
       fileEl.value = ""; input.value = "";
       if (fileNameEl) { fileNameEl.textContent = ""; fileNameEl.hidden = true; }
       resizeInput();
-      closeComposer();
       return;
     }
     const text = input.value.trim();
@@ -387,7 +367,6 @@
       showWorking();
       input.value = "";
       resizeInput();
-      closeComposer();
       window.setTimeout(loadConversations, 500);
     }
   });
