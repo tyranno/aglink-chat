@@ -22,6 +22,18 @@ type wsFrame struct {
 	Text    string `json:"text,omitempty"`
 	Caption string `json:"caption,omitempty"`
 	Data    string `json:"data,omitempty"`
+	// Target names the conversation the frame belongs to. The browser renders both
+	// the telegram stream and web topics, so without this it would append every
+	// frame to whatever conversation is on screen. A missing target means the
+	// telegram stream. Decoded and re-encoded here, so the field must exist.
+	Target *frameTarget `json:"target,omitempty"`
+}
+
+// frameTarget mirrors teleclaude's Target.
+type frameTarget struct {
+	Kind    string `json:"kind"`
+	Project string `json:"project,omitempty"`
+	ID      string `json:"id,omitempty"`
 }
 
 // controlOut is what teleclaude's control API sends us: a browser frame or a reply.

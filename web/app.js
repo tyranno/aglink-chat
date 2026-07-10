@@ -49,6 +49,29 @@
   // no target until an active web conversation is found or the user picks one.
   let currentTarget = null;
 
+  // Conversations with frames that arrived while they weren't on screen. The
+  // missed text itself isn't buffered here — the server persists every turn, so
+  // opening the conversation reloads it via /api/history. This only drives the
+  // unread badge in the topic list.
+  const unread = new Set();
+
+  // targetKey identifies a conversation. All non-web targets are the single
+  // telegram stream, matching teleclaude's Target.SameConversation.
+  function targetKey(t) {
+    if (!t || t.kind !== "web") return "telegram";
+    return "web:" + t.id;
+  }
+
+  // frameTarget is the conversation a frame belongs to. A frame with no target
+  // came from an older server and means the telegram stream.
+  function frameTarget(f) {
+    return f.target || { kind: "telegram" };
+  }
+
+  function isCurrent(t) {
+    return currentTarget != null && targetKey(t) === targetKey(currentTarget);
+  }
+
   if (attachBtn) attachBtn.addEventListener("click", () => fileEl.click());
 
   // The thumbnail's object URL must be revoked when replaced/cleared, or each
@@ -323,6 +346,7 @@
   // so whatever is already shown stays put.
   async function selectTarget(tgt) {
     currentTarget = tgt;
+    unread.delete(targetKey(tgt)); // opening it reloads everything below
     try {
       const qs = tgt.kind === "telegram"
         ? "kind=telegram"
@@ -339,6 +363,17 @@
     loadConversations(); // refresh highlight (and #current-topic header)
   }
 
+  // Marks a topic button as having unseen frames.
+  function applyUnread(button, key) {
+    if (!unread.has(key)) return;
+    button.classList.add("unread");
+    const dot = document.createElement("span");
+    dot.className = "unread-dot";
+    dot.title = "읽지 않은 새 응답";
+    dot.textContent = "●";
+    button.appendChild(dot);
+  }
+
   function makeTelegramButton(tg) {
     const button = document.createElement("button");
     button.type = "button";
@@ -348,6 +383,7 @@
     title.className = "topic-title";
     title.textContent = "📱 " + (tg.title || "텔레그램 대화");
     button.appendChild(title);
+    applyUnread(button, "telegram");
     if (tg.project) {
       const sub = document.createElement("span");
       sub.className = "topic-summary";
@@ -370,6 +406,7 @@
     title.className = "topic-title";
     title.textContent = "💬 " + (wc.title || wc.id);
     button.appendChild(title);
+    applyUnread(button, "web:" + wc.id);
     if (wc.workDir) {
       const sub = document.createElement("span");
       sub.className = "topic-summary";
@@ -404,6 +441,7 @@
         const ok = await askConfirm("대화 삭제", "이 대화를 삭제할까요? 되돌릴 수 없습니다.", { okLabel: "삭제", danger: true });
         if (ok) {
           if (currentTarget && currentTarget.kind === "web" && currentTarget.id === wc.id) { currentTarget = null; log.replaceChildren(); }
+          unread.delete("web:" + wc.id); // no badge for a conversation that's gone
           ws.send(JSON.stringify({ type: "web_delete", id: wc.id }));
           window.setTimeout(loadConversations, 400);
         }
@@ -563,6 +601,22 @@
     };
     ws.onmessage = (ev) => {
       let f; try { f = JSON.parse(ev.data); } catch { return; }
+      const tgt = frameTarget(f);
+
+      // A frame for a conversation that isn't on screen must never be appended
+      // to the one that is — that mixed the Telegram stream into web topics.
+      // Flag it unread instead; opening it reloads the full text from history.
+      if (!isCurrent(tgt)) {
+        if (f.type === "text" || f.type === "image" || f.type === "user") {
+          const key = targetKey(tgt);
+          if (!unread.has(key)) {
+            unread.add(key);
+            loadConversations(); // repaint the list with the badge, once
+          }
+        }
+        return; // typing/done for another conversation must not drive our indicator
+      }
+
       if (f.type === "text") add("assistant", f.text);
       else if (f.type === "image") addImage(f.caption || "", f.data);
       else if (f.type === "user") add("user", f.text); // input echoed from another channel (e.g. Telegram)
