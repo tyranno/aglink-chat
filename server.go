@@ -159,7 +159,7 @@ func (s *browserServer) handleWS(w http.ResponseWriter, r *http.Request) {
 		}
 		switch m.Type {
 		case "send":
-			s.forwardSend(m.Text)
+			s.forwardSend(m.Text, m.Target)
 		case "web_new":
 			_ = s.control.send(controlIn{Type: "web_new", Title: m.Title, Origin: "web"})
 		case "web_setdir":
@@ -176,20 +176,36 @@ func (s *browserServer) handleWS(w http.ResponseWriter, r *http.Request) {
 // forwardSend relays a browser's typed input to teleclaude's control API. Commands
 // go via handle_command, everything else via send_text; teleclaude fills in the
 // owner chatID (we send 0) and applies rate-limiting / origin tagging / echo.
-func (s *browserServer) forwardSend(text string) {
-	text = strings.TrimSpace(text)
-	if text == "" {
+//
+// target names the conversation the browser typed into. It must be relayed:
+// teleclaude defaults a target-less send_text to the global telegram stream, so
+// dropping it ran every web-topic message as a Telegram turn. A nil target is a
+// browser that hasn't picked a conversation, and keeps the telegram default.
+func (s *browserServer) forwardSend(text string, target json.RawMessage) {
+	m, ok := buildSendControlIn(text, target)
+	if !ok {
 		return
 	}
-	m := controlIn{Text: text, Origin: "web"}
+	if err := s.control.send(m); err != nil {
+		log.Printf("[browser] forward send failed: %v", err)
+	}
+}
+
+// buildSendControlIn is the pure part of forwardSend, split out so the target
+// relay is testable without a live control connection. ok is false for input
+// that should not be sent at all (empty after trimming).
+func buildSendControlIn(text string, target json.RawMessage) (controlIn, bool) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return controlIn{}, false
+	}
+	m := controlIn{Text: text, Origin: "web", Target: target}
 	if strings.HasPrefix(text, "!") {
 		m.Type = "handle_command"
 	} else {
 		m.Type = "send_text"
 	}
-	if err := s.control.send(m); err != nil {
-		log.Printf("[browser] forward send failed: %v", err)
-	}
+	return m, true
 }
 
 func (s *browserServer) handleConversations(w http.ResponseWriter, r *http.Request) {
