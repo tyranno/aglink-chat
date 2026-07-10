@@ -222,6 +222,23 @@ func (s *browserServer) handleConversations(w http.ResponseWriter, r *http.Reque
 	_, _ = w.Write(data)
 }
 
+// handleWorkers proxies the browser's active-worker poll to teleclaude. The
+// browser uses it to reconcile its working indicator: a conversation absent from
+// this list is idle, whatever push frames did or didn't arrive.
+func (s *browserServer) handleWorkers(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet || !s.authOK(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	data, err := s.control.request(controlIn{Type: "get_active_workers"})
+	if err != nil {
+		http.Error(w, "control API error", http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_, _ = w.Write(data)
+}
+
 // handleHistory proxies the browser's stored-history request to teleclaude's
 // control API (get_history), matching the embedded server's /api/history so the
 // shared app.js works identically here.
@@ -444,6 +461,7 @@ func (s *browserServer) Start() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", s.handleWS)
 	mux.HandleFunc("/api/conversations", s.handleConversations)
+	mux.HandleFunc("/api/workers", s.handleWorkers)
 	mux.HandleFunc("/api/history", s.handleHistory)
 	mux.HandleFunc("/api/upload", s.handleUpload)
 	mux.HandleFunc("/api/capabilities", s.handleCapabilities)

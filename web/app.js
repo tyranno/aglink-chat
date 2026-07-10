@@ -129,6 +129,12 @@
     });
   }
 
+  // Busy state is per conversation, not per screen: a turn running in another
+  // topic must not paint (or keep painting) the indicator on the one you're
+  // looking at. Keyed like targetKey(): "telegram" or "web:<id>".
+  const working = new Map(); // key -> { startedAt, lastAliveAt }
+  let workingTimer = null;
+
   // STALE_AFTER_MS: the server re-sends a "typing" frame roughly every 2
   // minutes for as long as the worker is genuinely still running (see
   // manager.go's runHeartbeat). If none has arrived in a while, that's a real
@@ -136,33 +142,106 @@
   // dropped) — not just "still thinking". A generous multiple of the 2-minute
   // heartbeat avoids false positives from a single delayed tick.
   const STALE_AFTER_MS = 5 * 60 * 1000;
-  let workingTimer = null, workingStart = 0, lastAliveAt = 0;
-  function workingElapsedText() {
-    const secs = Math.max(0, Math.floor((Date.now() - workingStart) / 1000));
+
+  // The push frames are the fast path; this poll is the safety net that ends a
+  // turn whose "done" never arrived. It is authoritative in both directions:
+  // it starts an indicator after a reconnect, and ends one that is stuck.
+  const WORKER_POLL_MS = 3000;
+
+  // A freshly submitted turn is not registered as a running worker until it
+  // reaches runWorker — for the telegram stream that is *after* the routing LLM
+  // call, which takes seconds. Clearing on absence before then would hide the
+  // indicator while the turn is genuinely starting, so absence only counts once
+  // the entry is older than this.
+  const WORKING_GRACE_MS = 30 * 1000;
+
+  function workingElapsedText(w) {
+    const secs = Math.max(0, Math.floor((Date.now() - w.startedAt) / 1000));
     const elapsed = secs < 60 ? `${secs}초` : `${Math.floor(secs / 60)}분 ${secs % 60}초`;
-    if (Date.now() - lastAliveAt > STALE_AFTER_MS) {
+    if (Date.now() - w.lastAliveAt > STALE_AFTER_MS) {
       return `⚠️ 작업 진행 중… (${elapsed} 경과, 서버 응답 확인 안 된 지 오래됨 — 멈췄을 수 있음)`;
     }
     return `작업 진행 중… (${elapsed} 경과)`;
   }
-  function showWorking() {
+
+  // startWorking/stopWorking mutate the state; renderWorking is the only place
+  // that touches the DOM, so the indicator always reflects the open conversation.
+  function startWorking(key) {
+    const now = Date.now();
+    const w = working.get(key);
+    if (w) w.lastAliveAt = now; // a typing frame is a live-signal, not a restart
+    else working.set(key, { startedAt: now, lastAliveAt: now });
+    renderWorking();
+  }
+  function stopWorking(key) {
+    if (working.delete(key)) renderWorking();
+  }
+  function currentWorking() {
+    return currentTarget ? working.get(targetKey(currentTarget)) : undefined;
+  }
+  function renderWorking() {
     if (!workingEl) return;
-    lastAliveAt = Date.now(); // every "typing" frame is a live-signal, not just the first
-    if (workingTimer) return; // already showing; the label timer will pick up the refreshed lastAliveAt
-    workingStart = Date.now();
+    const w = currentWorking();
+    if (!w) {
+      if (workingTimer) { clearInterval(workingTimer); workingTimer = null; }
+      if (!workingEl.hidden) { workingEl.hidden = true; scrollToBottom(); }
+      return;
+    }
+    const wasHidden = workingEl.hidden;
     workingEl.hidden = false;
-    if (workingLabel) workingLabel.textContent = workingElapsedText();
-    workingTimer = setInterval(() => {
-      if (workingLabel) workingLabel.textContent = workingElapsedText();
-    }, 1000);
-    scrollToBottom(); // the indicator shrinks the log; keep the newest message visible
+    if (workingLabel) workingLabel.textContent = workingElapsedText(w);
+    if (!workingTimer) {
+      workingTimer = setInterval(() => {
+        const cur = currentWorking();
+        if (!cur) { renderWorking(); return; }
+        if (workingLabel) workingLabel.textContent = workingElapsedText(cur);
+      }, 1000);
+    }
+    if (wasHidden) scrollToBottom(); // the indicator shrinks the log
   }
-  function hideWorking() {
-    if (!workingEl) return;
-    if (workingTimer) { clearInterval(workingTimer); workingTimer = null; }
-    workingEl.hidden = true;
-    scrollToBottom();
+
+  // workerKey maps a server-reported conversationId onto our target keys. The
+  // telegram stream's conversation is literally "telegram" (see store.json).
+  function workerKey(convID) {
+    return convID === "telegram" ? "telegram" : "web:" + convID;
   }
+
+  // pollWorkers reconciles the indicator against the server's list of running
+  // workers. Absence only clears an entry past the grace window, so a turn that
+  // has been submitted but not yet registered keeps its indicator.
+  //
+  // Idle tabs don't poll: with nothing showing, a typing frame is what starts an
+  // indicator. force is used on reconnect, where frames may have been missed in
+  // both directions.
+  async function pollWorkers(force = false) {
+    if (!force && working.size === 0) return;
+    let data;
+    try {
+      const resp = await fetch("/api/workers", { headers: authHeaders });
+      if (!resp.ok) return;
+      data = await resp.json();
+    } catch { return; } // offline: leave the state alone, ws.onclose handles it
+
+    const active = new Set((data.workers || []).map((w) => workerKey(w.conversationId)));
+    let changed = false;
+
+    for (const key of active) {
+      if (!working.has(key)) {
+        const now = Date.now();
+        working.set(key, { startedAt: now, lastAliveAt: now });
+        changed = true;
+      }
+    }
+    const now = Date.now();
+    for (const [key, w] of [...working]) {
+      if (!active.has(key) && now - w.startedAt > WORKING_GRACE_MS) {
+        working.delete(key);
+        changed = true;
+      }
+    }
+    if (changed) renderWorking();
+  }
+  window.setInterval(pollWorkers, WORKER_POLL_MS);
 
   function applySidebarHidden(hidden) {
     if (!shell) return;
@@ -347,6 +426,7 @@
   async function selectTarget(tgt) {
     currentTarget = tgt;
     unread.delete(targetKey(tgt)); // opening it reloads everything below
+    renderWorking(); // show this conversation's busy state, not the previous one's
     try {
       const qs = tgt.kind === "telegram"
         ? "kind=telegram"
@@ -592,36 +672,44 @@
     ws.onopen = () => {
       statusEl.textContent = "연결됨"; statusEl.className = "on"; backoff = 500;
       if (currentTarget) selectTarget(currentTarget); else loadConversations();
+      pollWorkers(true); // a turn may have started, finished, or both while we were away
     };
     ws.onclose = () => {
       statusEl.textContent = "연결 끊김"; statusEl.className = "off";
-      hideWorking();
+      // While disconnected we cannot know what is still running; the poll on
+      // reconnect re-establishes the truth.
+      working.clear();
+      renderWorking();
       setTimeout(connect, backoff);
       backoff = Math.min(backoff * 2, 10000);
     };
     ws.onmessage = (ev) => {
       let f; try { f = JSON.parse(ev.data); } catch { return; }
       const tgt = frameTarget(f);
+      const key = targetKey(tgt);
 
-      // A frame for a conversation that isn't on screen must never be appended
+      // Busy state belongs to the conversation, not the screen, so it is updated
+      // before the render filter below. Dropping a "done" for an off-screen
+      // conversation would strand its indicator the moment you switched away.
+      if (f.type === "typing") startWorking(key);
+      else if (f.type === "done") stopWorking(key);
+
+      // Content for a conversation that isn't on screen must never be appended
       // to the one that is — that mixed the Telegram stream into web topics.
       // Flag it unread instead; opening it reloads the full text from history.
       if (!isCurrent(tgt)) {
         if (f.type === "text" || f.type === "image" || f.type === "user") {
-          const key = targetKey(tgt);
           if (!unread.has(key)) {
             unread.add(key);
             loadConversations(); // repaint the list with the badge, once
           }
         }
-        return; // typing/done for another conversation must not drive our indicator
+        return;
       }
 
       if (f.type === "text") add("assistant", f.text);
       else if (f.type === "image") addImage(f.caption || "", f.data);
       else if (f.type === "user") add("user", f.text); // input echoed from another channel (e.g. Telegram)
-      else if (f.type === "typing") showWorking();
-      else if (f.type === "done") hideWorking();
     };
   }
 
@@ -632,9 +720,10 @@
       fd.append("file", fileEl.files[0]);
       fd.append("caption", input.value.trim());
       add("user", "📎 " + fileEl.files[0].name + (input.value.trim() ? " — " + input.value.trim() : ""));
-      showWorking();
+      const uploadKey = targetKey(currentTarget);
+      startWorking(uploadKey);
       const resp = await fetch("/api/upload", { method: "POST", headers: authHeaders, body: fd });
-      if (!resp.ok) { add("system", "업로드 실패: " + resp.status); hideWorking(); }
+      if (!resp.ok) { add("system", "업로드 실패: " + resp.status); stopWorking(uploadKey); }
       fileEl.value = ""; input.value = "";
       updateFileUI();
       resizeInput();
@@ -642,7 +731,7 @@
     }
     const text = input.value.trim();
     if (sendText(text, true)) {
-      showWorking();
+      startWorking(targetKey(currentTarget));
       input.value = "";
       resizeInput();
       window.setTimeout(loadConversations, 500);
