@@ -269,10 +269,15 @@
     });
   }
 
+  // User bubbles stay verbatim: what someone typed should be shown as typed, not
+  // reinterpreted. Only worker/system output is Markdown. If markdown.js failed
+  // to load, fall back to plain text rather than dropping the message.
   function add(role, text) {
     const d = document.createElement("div");
     d.className = "msg " + role;
-    d.textContent = text;
+    const md = window.TCMarkdown;
+    if (role === "user" || !md) d.textContent = text;
+    else { d.classList.add("md"); d.appendChild(md.renderMarkdown(text)); }
     log.appendChild(d);
     scrollToBottom();
     return d;
