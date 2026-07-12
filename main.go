@@ -5,8 +5,10 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 func main() {
@@ -47,12 +49,19 @@ func serveCmd(args []string) {
 		btok = genToken()
 	}
 
+	// SIGINT/SIGTERM cancel ctx → the control client stops reconnecting and the
+	// browser server drains and closes, so teleclaude's supervisor sees a clean
+	// exit (and `!update`'s kill lets go of the .exe lock promptly) instead of a
+	// hard kill mid-request.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	hub := newBrowserHub()
 	control := newControlClient(*controlAddr, ctok, hub)
-	go control.run(context.Background())
+	go control.run(ctx)
 
 	srv := &browserServer{addr: *addr, token: btok, control: control, hub: hub}
-	if err := srv.Start(); err != nil {
+	if err := srv.Start(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "server: %v\n", err)
 		os.Exit(1)
 	}

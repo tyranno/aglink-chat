@@ -444,7 +444,7 @@ func (s *browserServer) handleIndex(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(b)
 }
 
-func (s *browserServer) Start() error {
+func (s *browserServer) Start(ctx context.Context) error {
 	staticSub, err := fs.Sub(webFS, "web")
 	if err != nil {
 		return err
@@ -492,7 +492,22 @@ func (s *browserServer) Start() error {
 		}
 	}
 
-	return srv.Serve(ln)
+	// Graceful shutdown: on ctx cancel (SIGINT/SIGTERM relayed by the caller),
+	// drain in-flight requests and close both listeners so the process exits
+	// cleanly instead of being killed mid-write. srv.Shutdown covers every
+	// listener this srv serves (IPv4 + the IPv6 mirror above).
+	go func() {
+		<-ctx.Done()
+		log.Printf("[aglink-chat] 종료 신호 수신 — graceful shutdown 중…")
+		shutCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutCtx)
+	}()
+
+	if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+		return err
+	}
+	return nil
 }
 
 // ipv6LoopbackAddr returns the "[::1]:port" form of an IPv4-loopback / localhost

@@ -67,6 +67,48 @@ Inbound (aglink-chat → teleclaude), request/response:
 
 ## teleclaude와 연결
 
-(To be filled in once step 2 lands — will document `chat_control.enabled`/`chat_control.addr` in
-`config.yaml`, the sibling-directory layout, and `!update` integrated deploy, mirroring
-[aglink-web's "teleclaude와 연결" section](https://github.com/tyranno/aglink-web#teleclaude와-연결).)
+teleclaude가 `aglink-chat serve`를 **자식 프로세스로 관리**(supervise)합니다 — 직접 실행할 필요 없이,
+teleclaude를 켜면 아래 설정에 따라 자동으로 띄우고 control API로 연결합니다.
+
+### 1. 설정 (`~/.teleclaude/config.yaml`)
+
+```yaml
+aglink_chat:
+  enabled: true          # 이거 하나면 control API(chat_control)도 자동 활성화됨
+  addr: "127.0.0.1:1717" # 브라우저 UI 주소 (기본값)
+  binary_path: ""        # 비우면 teleclaude.exe 옆 또는 ../aglink-chat/ 에서 자동 탐지
+```
+
+> `aglink_chat.enabled: true`는 control API를 자동으로 함의합니다. (이전에는 `chat_control.enabled`도
+> 따로 켜야 했고, 하나만 켜면 조용히 아무것도 안 떴습니다.) 제어 주소/토큰을 바꾸려면 `chat_control:`
+> 섹션을 별도로 지정하면 되고, 아니면 기본값(`127.0.0.1:17170`, 토큰 자동 생성)이 쓰입니다.
+
+### 2. 배치 (자동 탐지 순서)
+
+`aglink-chat(.exe)`를 다음 중 한 곳에 두면 `binary_path` 없이 인식됩니다:
+
+1. `binary_path`로 지정한 경로
+2. **teleclaude 실행파일과 같은 폴더** (`!update` 통합 배포가 놓는 위치)
+3. **형제 소스 저장소** `../aglink-chat/` (dev 체크아웃)
+4. `PATH`
+
+### 3. 토큰
+
+- **control 토큰**: `~/.teleclaude/chat_control.token` (없으면 teleclaude가 생성). teleclaude가
+  `--control-token`으로 직접 넘겨주므로 보통 신경 쓸 필요 없습니다.
+- **브라우저 토큰**: `~/.teleclaude/web_chat.token` (재사용 — 이미 열린 탭이 재연결됨). 접속 URL은
+  기동 로그에 `http://127.0.0.1:1717/?token=...` 형태로 출력됩니다.
+
+### 4. 텔레그램 없이 웹채팅만 (선택)
+
+`telegram.bot_token`을 비워두면 teleclaude가 **웹채팅 전용 모드**로 부팅합니다(텔레그램 폴링 없음).
+`allowed_user_ids`는 최소 1개 필요합니다(웹 소유자 식별용).
+
+### 5. 재배포 (`!update` / redeploy-plugin.ps1)
+
+teleclaude와 aglink-chat을 형제 폴더로 두면, teleclaude의 `!update`가 aglink-chat을 먼저 빌드해
+teleclaude.exe 옆에 배치한 뒤 재기동합니다. 수동으로는 teleclaude 저장소의
+`scripts/redeploy-plugin.ps1 -Name aglink-chat`을 쓰세요(빌드→종료→복사→재기동 확인).
+
+`aglink-chat`은 `SIGINT`/`SIGTERM`에 graceful shutdown 하므로(진행 중 요청 드레이닝 후 종료),
+`!update`가 `.exe` 잠금을 즉시 놓아주고 supervisor가 새 바이너리로 깔끔히 재기동합니다.

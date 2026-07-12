@@ -30,6 +30,7 @@
   // Admin surface (shown after capability probe).
   const adminControls = document.getElementById("admin-controls");
   const versionBadge = document.getElementById("version-badge");
+  const backendBadge = document.getElementById("backend-badge");
   const btnConfig = document.getElementById("btn-config");
   const btnConnections = document.getElementById("btn-connections");
   const configOverlay = document.getElementById("config-overlay");
@@ -558,6 +559,9 @@
 
   function renderConversations(data) {
     if (!topicList) return;
+    // Keep the header backend badge live: telegram.backend mirrors the global
+    // active backend, refreshed on every conversations poll.
+    if (data && data.telegram && data.telegram.backend) renderBackendBadge(data.telegram.backend);
     topicList.replaceChildren();
 
     if (data && data.telegram) {
@@ -787,11 +791,26 @@
     versionBadge.title = tip;
   }
 
+  // Render the header backend badge (claude / codex). The backend is global
+  // (manager.Backend()); teleclaude reports it in the version payload and, live,
+  // as data.telegram.backend on every conversations refresh — so a `!backend`
+  // switch is reflected without an extra poll.
+  function renderBackendBadge(backend) {
+    if (!backendBadge) return;
+    if (!backend) { backendBadge.hidden = true; return; }
+    backendBadge.hidden = false;
+    backendBadge.textContent = "🤖 " + backend;
+    backendBadge.classList.toggle("backend-claude", backend === "claude");
+    backendBadge.classList.toggle("backend-codex", backend === "codex");
+    backendBadge.title = "현재 연결된 백엔드: " + backend;
+  }
+
   async function bootstrapCapabilities() {
     try {
       const resp = await fetch("/api/capabilities", { headers: authHeaders });
       if (!resp.ok) return; // aglink-chat: 404 → admin UI stays hidden
       const cap = await resp.json();
+      renderBackendBadge(cap.backend); // backend indicator is not admin-gated
       if (!cap.admin) return;
       if (adminControls) adminControls.hidden = false;
       renderVersionBadge(cap);

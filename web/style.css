@@ -25,6 +25,9 @@ header .icon-button { background: transparent; border-color: rgba(255, 255, 255,
 #admin-controls[hidden] { display: none; }
 .version-badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: rgba(255, 255, 255, 0.18); color: #e2e8f0; font-weight: 600; white-space: nowrap; cursor: default; }
 .version-badge.update-available { background: #f59e0b; color: #1f2937; }
+.backend-badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; font-weight: 600; white-space: nowrap; cursor: default; background: rgba(255, 255, 255, 0.18); color: #e2e8f0; }
+.backend-badge.backend-claude { background: #d97757; color: #1f2937; }
+.backend-badge.backend-codex { background: #10a37f; color: #f8fafc; }
 #shell { flex: 1; min-height: 0; display: grid; grid-template-columns: 280px minmax(0, 1fr); }
 #shell.sidebar-hidden { grid-template-columns: minmax(0, 1fr); }
 #shell.sidebar-hidden #topics { display: none; }
