@@ -442,32 +442,47 @@
     const key = targetKey(tgt);
     unread.delete(key); // opening it reloads everything below
     renderWorking(); // show this conversation's busy state, not the previous one's
-    loadingBuffers.set(key, []); // buffer live frames until the snapshot below lands
-    try {
-      const qs = tgt.kind === "telegram"
-        ? "kind=telegram"
-        : "kind=web&id=" + encodeURIComponent(tgt.id);
-      const resp = await fetch("/api/history?" + qs, { headers: authHeaders });
-      if (resp.ok) {
-        const data = await resp.json();
-        log.replaceChildren();
-        for (const turn of (data.turns || [])) {
-          add(turn.role === "user" ? "user" : "assistant", turn.text);
+    const qs = tgt.kind === "telegram"
+      ? "kind=telegram"
+      : "kind=web&id=" + encodeURIComponent(tgt.id);
+
+    // Reconcile the snapshot against the live stream by RE-FETCHING, not by
+    // replaying buffered frames. The server persists a turn before sending it
+    // live (manager.go), so a fresh snapshot is always authoritative once
+    // nothing lands while it's in flight. Replaying the buffer instead would
+    // double-render a turn that a concurrent fetch already captured: if a turn
+    // is persisted+sent in the window between this fetch being issued and the
+    // server reading the store, the snapshot ALREADY contains it and its live
+    // frame also arrives mid-fetch — rendered once from the snapshot, once from
+    // the replay. loadingBuffers.get(key) being non-empty after the fetch is the
+    // staleness signal (ws.onmessage pushes there while a fetch is in flight);
+    // on staleness we re-fetch, guaranteeing the turn shows exactly once.
+    const MAX_RELOADS = 3; // real traffic needs at most one retry; bounds a pathological arrival storm
+    for (let attempt = 0; attempt < MAX_RELOADS; attempt++) {
+      loadingBuffers.set(key, []); // its presence marks "a frame may land mid-fetch"
+      let fetchedOk = false;
+      try {
+        const resp = await fetch("/api/history?" + qs, { headers: authHeaders });
+        if (resp.ok) {
+          const data = await resp.json();
+          log.replaceChildren();
+          for (const turn of (data.turns || [])) {
+            add(turn.role === "user" ? "user" : "assistant", turn.text);
+          }
+          fetchedOk = true;
         }
-      }
-    } catch (e) { /* keep whatever is shown; live continues */ }
-    // Replay anything that streamed in mid-fetch — it postdates the snapshot
-    // above (the server only sends a turn live after persisting it, so this
-    // can't already be reflected there) and would otherwise have just been
-    // erased by replaceChildren().
-    const buffered = loadingBuffers.get(key) || [];
-    loadingBuffers.delete(key);
-    for (const f of buffered) renderLiveFrame(f);
+      } catch (e) { /* keep whatever is shown; live continues */ }
+      const arrivedMidFetch = (loadingBuffers.get(key) || []).length > 0;
+      loadingBuffers.delete(key);
+      // No await between delete and the next set, so no frame can slip in
+      // unbuffered between attempts.
+      if (!fetchedOk || !arrivedMidFetch) break; // snapshot is authoritative
+    }
     loadConversations(); // refresh highlight (and #current-topic header)
   }
 
-  // Renders one live (already-current-target, already-persisted) frame. Shared
-  // by ws.onmessage and selectTarget's post-fetch buffer replay.
+  // Renders one live (already-current-target, already-persisted) frame. Used by
+  // ws.onmessage for ordinary live delivery when no history fetch is in flight.
   function renderLiveFrame(f) {
     if (f.type === "text") add("assistant", f.text);
     else if (f.type === "image") addImage(f.caption || "", f.data);
