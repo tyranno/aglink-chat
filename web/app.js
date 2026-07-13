@@ -56,6 +56,14 @@
   // unread badge in the topic list.
   const unread = new Set();
 
+  // Frames that arrive over the websocket for a target while selectTarget's
+  // history fetch for that same target is still in flight. A live frame can
+  // land in the window between "fetch issued" and "fetch resolved" (e.g. a
+  // turn finishing right as the page reconnects) — without buffering, the
+  // resolve's replaceChildren() would silently wipe it, since the snapshot
+  // it fetched a moment earlier may predate that turn.
+  const loadingBuffers = new Map(); // key -> buffered frame[]
+
   // targetKey identifies a conversation. All non-web targets are the single
   // telegram stream, matching teleclaude's Target.SameConversation.
   function targetKey(t) {
@@ -431,8 +439,10 @@
   // so whatever is already shown stays put.
   async function selectTarget(tgt) {
     currentTarget = tgt;
-    unread.delete(targetKey(tgt)); // opening it reloads everything below
+    const key = targetKey(tgt);
+    unread.delete(key); // opening it reloads everything below
     renderWorking(); // show this conversation's busy state, not the previous one's
+    loadingBuffers.set(key, []); // buffer live frames until the snapshot below lands
     try {
       const qs = tgt.kind === "telegram"
         ? "kind=telegram"
@@ -446,7 +456,22 @@
         }
       }
     } catch (e) { /* keep whatever is shown; live continues */ }
+    // Replay anything that streamed in mid-fetch — it postdates the snapshot
+    // above (the server only sends a turn live after persisting it, so this
+    // can't already be reflected there) and would otherwise have just been
+    // erased by replaceChildren().
+    const buffered = loadingBuffers.get(key) || [];
+    loadingBuffers.delete(key);
+    for (const f of buffered) renderLiveFrame(f);
     loadConversations(); // refresh highlight (and #current-topic header)
+  }
+
+  // Renders one live (already-current-target, already-persisted) frame. Shared
+  // by ws.onmessage and selectTarget's post-fetch buffer replay.
+  function renderLiveFrame(f) {
+    if (f.type === "text") add("assistant", f.text);
+    else if (f.type === "image") addImage(f.caption || "", f.data);
+    else if (f.type === "user") add("user", f.text); // input echoed from another channel (e.g. Telegram)
   }
 
   // Marks a topic button as having unseen frames.
@@ -716,9 +741,9 @@
         return;
       }
 
-      if (f.type === "text") add("assistant", f.text);
-      else if (f.type === "image") addImage(f.caption || "", f.data);
-      else if (f.type === "user") add("user", f.text); // input echoed from another channel (e.g. Telegram)
+      const buffer = loadingBuffers.get(key);
+      if (buffer) buffer.push(f); // selectTarget's fetch for this target is still in flight
+      else renderLiveFrame(f);
     };
   }
 
