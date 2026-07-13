@@ -108,7 +108,7 @@ header .icon-button { background: transparent; border-color: rgba(255, 255, 255,
 }
 
 /* Inline bottom composer (always visible) */
-#composer { display: flex; align-items: flex-end; gap: 6px; padding: 8px; border-top: 1px solid #cbd5e1; background: rgba(255, 255, 255, 0.85); backdrop-filter: blur(6px); font-size: 13px; }
+#composer { display: flex; align-items: flex-end; gap: 6px; padding: 8px; border-top: 1px solid #cbd5e1; background: rgba(255, 255, 255, 0.92); font-size: 13px; }
 #input { flex: 1; min-height: calc(var(--input-line-height) + 16px); max-height: calc(var(--input-line-height) * 10 + 16px); line-height: var(--input-line-height); padding: 7px 8px; border: 1px solid #cbd5e1; border-radius: 6px; resize: none; overflow-y: auto; font: inherit; background: #fff; }
 #file-thumb { width: 32px; height: 32px; border-radius: 6px; object-fit: cover; align-self: center; border: 1px solid #cbd5e1; flex: 0 0 auto; }
 #file-thumb[hidden] { display: none; }

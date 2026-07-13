@@ -308,10 +308,21 @@
     scrollToBottom();
   }
 
+  // Coalesces rapid-fire calls (one per keystroke on the "input" event,
+  // including every char of an IME composition) into at most one resize per
+  // animation frame — resetting height to "auto" then reading scrollHeight
+  // forces a synchronous layout, and #composer's translucent background made
+  // that reflow repaint an expensive backdrop-filter region on every single
+  // keystroke, which is what made typing/deleting feel laggy.
+  let resizeInputScheduled = false;
   function resizeInput() {
-    if (!input) return;
-    input.style.height = "auto";
-    input.style.height = input.scrollHeight + "px";
+    if (!input || resizeInputScheduled) return;
+    resizeInputScheduled = true;
+    requestAnimationFrame(() => {
+      resizeInputScheduled = false;
+      input.style.height = "auto";
+      input.style.height = input.scrollHeight + "px";
+    });
   }
 
   // Esc closes the admin panels (config / connections) and any open dialog.
