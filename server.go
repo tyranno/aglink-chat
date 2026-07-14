@@ -384,6 +384,46 @@ func (s *browserServer) handleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleSettings proxies the structured settings schema/update to teleclaude via
+// the control API (get_settings / set_settings). GET returns the schema JSON;
+// PUT sends a JSON updates map and maps the {ok,error} reply to 204/400.
+func (s *browserServer) handleSettings(w http.ResponseWriter, r *http.Request) {
+	if !s.authOK(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		data, err := s.control.request(controlIn{Type: "get_settings"})
+		if err != nil {
+			http.Error(w, "control API error", http.StatusBadGateway)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		_, _ = w.Write(data)
+	case http.MethodPut:
+		body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		data, err := s.control.request(controlIn{Type: "set_settings", Body: string(body)})
+		if err != nil {
+			http.Error(w, "control API error", http.StatusBadGateway)
+			return
+		}
+		var m struct {
+			OK    bool   `json:"ok"`
+			Error string `json:"error"`
+		}
+		_ = json.Unmarshal(data, &m)
+		if m.OK {
+			w.WriteHeader(http.StatusNoContent)
+		} else {
+			http.Error(w, m.Error, http.StatusBadRequest)
+		}
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
 // handleStatus reports this frontend's own bind address for the "이 웹 서버"
 // panel section (aglink helper status comes from /api/aux).
 func (s *browserServer) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -450,7 +490,9 @@ func (s *browserServer) handleUpload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *browserServer) handleIndex(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
+	// Serve the SPA shell for the app routes. app.js reads location.pathname and
+	// renders the chat view or the /setting view. Anything else is a real 404.
+	if r.URL.Path != "/" && r.URL.Path != "/setting" {
 		http.NotFound(w, r)
 		return
 	}
@@ -498,6 +540,7 @@ func (s *browserServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/api/aux", s.handleAux)
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/config", s.handleConfig)
+	mux.HandleFunc("/api/settings", s.handleSettings)
 	mux.Handle("/static/", noStore(http.StripPrefix("/static/", http.FileServer(http.FS(staticSub)))))
 	mux.HandleFunc("/", s.handleIndex)
 
