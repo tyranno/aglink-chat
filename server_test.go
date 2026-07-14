@@ -60,3 +60,45 @@ func TestBuildSendControlIn_RejectsBlank(t *testing.T) {
 		t.Error("blank text must not be sent")
 	}
 }
+
+func TestBuildSetChannelBackendControlIn(t *testing.T) {
+	m := buildSetChannelBackendControlIn("web", "conv-7", "codex")
+	if m.Type != "set_channel_backend" {
+		t.Errorf("type = %q, want set_channel_backend", m.Type)
+	}
+	if m.Backend != "codex" {
+		t.Errorf("backend = %q, want codex", m.Backend)
+	}
+	if m.Origin != "web" {
+		t.Errorf("origin = %q, want web", m.Origin)
+	}
+	want := json.RawMessage(`{"id":"conv-7","kind":"web"}`)
+	var gotMap, wantMap map[string]string
+	_ = json.Unmarshal(m.Target, &gotMap)
+	_ = json.Unmarshal(want, &wantMap)
+	if gotMap["kind"] != wantMap["kind"] || gotMap["id"] != wantMap["id"] {
+		t.Errorf("target = %s, want %s", m.Target, want)
+	}
+}
+
+func TestBuildUploadControlIn_RelaysTarget(t *testing.T) {
+	tgt := json.RawMessage(`{"kind":"web","id":"conv-7"}`)
+
+	m := buildUploadControlIn("C:\\tmp\\image.png", "caption", tgt)
+
+	if m.Type != "upload_attachment" {
+		t.Errorf("type = %q, want upload_attachment", m.Type)
+	}
+	if m.Path != "C:\\tmp\\image.png" {
+		t.Errorf("path = %q", m.Path)
+	}
+	if m.Caption != "caption" {
+		t.Errorf("caption = %q", m.Caption)
+	}
+	if m.Origin != "web" {
+		t.Errorf("origin = %q, want web", m.Origin)
+	}
+	if string(m.Target) != string(tgt) {
+		t.Errorf("target = %s, want %s", m.Target, tgt)
+	}
+}

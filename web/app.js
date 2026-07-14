@@ -69,6 +69,30 @@
   // element, so without this a draft typed in one channel silently appears
   // in whichever channel is on screen when it's sent.
   const drafts = new Map(); // key -> draft text
+  const sentHistory = [];
+  let historyIndex = 0;
+
+  function rememberSentHistory(text) {
+    const item = String(text || "").trim();
+    if (!item) return;
+    if (sentHistory[sentHistory.length - 1] !== item) sentHistory.push(item);
+    if (sentHistory.length > 100) sentHistory.splice(0, sentHistory.length - 100);
+    historyIndex = sentHistory.length;
+  }
+
+  function recallSentHistory(direction) {
+    if (!input || sentHistory.length === 0) return false;
+    const atStart = input.selectionStart === 0 && input.selectionEnd === 0;
+    const atEnd = input.selectionStart === input.value.length && input.selectionEnd === input.value.length;
+    if (direction < 0 && input.value && !atStart) return false;
+    if (direction > 0 && input.value && !atEnd) return false;
+    historyIndex = Math.max(0, Math.min(sentHistory.length, historyIndex + direction));
+    input.value = historyIndex < sentHistory.length ? sentHistory[historyIndex] : "";
+    if (currentTarget) drafts.set(targetKey(currentTarget), input.value);
+    resizeInput();
+    requestAnimationFrame(() => input.setSelectionRange(input.value.length, input.value.length));
+    return true;
+  }
 
   // targetKey identifies a conversation. All non-web targets are the single
   // telegram stream, matching teleclaude's Target.SameConversation.
@@ -449,6 +473,38 @@
     return true;
   }
 
+  function backendLabel(backend) {
+    return backend ? String(backend).toUpperCase() : "DEFAULT";
+  }
+
+  async function chooseChannelBackend(target, currentBackend) {
+    const backend = await askMenu("AI backend", [
+      { value: "default", label: "Default" + (!currentBackend ? " ✓" : "") },
+      { value: "claude", label: "Claude" + (currentBackend === "claude" ? " ✓" : "") },
+      { value: "codex", label: "Codex" + (currentBackend === "codex" ? " ✓" : "") },
+    ]);
+    if (backend == null) return;
+    await setChannelBackend(target, backend);
+  }
+
+  async function setChannelBackend(target, backend) {
+    try {
+      const resp = await fetch("/api/channel/backend", {
+        method: "PUT",
+        headers: { ...authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: target.kind || "telegram", id: target.id || "", backend }),
+      });
+      if (!resp.ok) {
+        const text = await resp.text();
+        add("system", "Backend setting failed: " + text.trim());
+        return;
+      }
+      await loadConversations();
+    } catch (e) {
+      add("system", "Backend setting failed: " + e);
+    }
+  }
+
   // Load and render stored history for a target, then hand off to the live
   // stream (frames keep appending after this). Falls back silently on error
   // so whatever is already shown stays put.
@@ -535,7 +591,25 @@
       sub.textContent = "작업: " + tg.project;
       button.appendChild(sub);
     }
-    button.addEventListener("click", () => selectTarget({ kind: "telegram" }));
+    const backend = document.createElement("span");
+    backend.className = "topic-backend";
+    backend.textContent = backendLabel(tg.backend);
+    backend.title = "AI backend";
+    button.appendChild(backend);
+    button.addEventListener("click", (e) => {
+      if (e.target && e.target.dataset && e.target.dataset.gear) return;
+      selectTarget({ kind: "telegram" });
+    });
+    const menu = document.createElement("span");
+    menu.textContent = "⋯";
+    menu.dataset.gear = "1";
+    menu.className = "topic-menu";
+    menu.title = "Channel settings";
+    menu.addEventListener("click", async (ev) => {
+      ev.stopPropagation();
+      await chooseChannelBackend({ kind: "telegram" }, tg.backend || "");
+    });
+    button.appendChild(menu);
     return button;
   }
 
@@ -552,6 +626,11 @@
     title.textContent = "💬 " + (wc.title || wc.id);
     button.appendChild(title);
     applyUnread(button, "web:" + wc.id);
+    const backend = document.createElement("span");
+    backend.className = "topic-backend";
+    backend.textContent = backendLabel(wc.backend);
+    backend.title = "AI backend";
+    button.appendChild(backend);
     if (wc.workDir) {
       const sub = document.createElement("span");
       sub.className = "topic-summary";
@@ -572,11 +651,14 @@
       ev.stopPropagation();
       if (!ws || ws.readyState !== WebSocket.OPEN) return;
       const action = await askMenu("대화 관리", [
+        { value: "backend", label: "AI backend" },
         { value: "rename", label: "✏️  이름 변경" },
         { value: "workdir", label: "📁  작업 폴더 변경" },
         { value: "delete", label: "🗑️  삭제", danger: true },
       ]);
-      if (action === "rename") {
+      if (action === "backend") {
+        await chooseChannelBackend({ kind: "web", id: wc.id }, wc.backend || "");
+      } else if (action === "rename") {
         const title = await askText("이름 변경", "새 이름", wc.title || "");
         if (title) {
           // Await the server's acknowledgment before refreshing, so a fast page
@@ -800,6 +882,7 @@
       const fd = new FormData();
       fd.append("file", fileEl.files[0]);
       fd.append("caption", input.value.trim());
+      fd.append("target", JSON.stringify(currentTarget || { kind: "telegram" }));
       add("user", "📎 " + fileEl.files[0].name + (input.value.trim() ? " — " + input.value.trim() : ""));
       const uploadKey = targetKey(currentTarget);
       startWorking(uploadKey);
@@ -812,6 +895,7 @@
     }
     const text = input.value.trim();
     if (sendText(text, true)) {
+      rememberSentHistory(text);
       startWorking(targetKey(currentTarget));
       input.value = "";
       resizeInput();
@@ -821,6 +905,14 @@
 
   input.addEventListener("input", resizeInput);
   input.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowUp" && recallSentHistory(-1)) {
+      e.preventDefault();
+      return;
+    }
+    if (e.key === "ArrowDown" && recallSentHistory(1)) {
+      e.preventDefault();
+      return;
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       form.requestSubmit();

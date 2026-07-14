@@ -82,12 +82,14 @@ type browserServer struct {
 
 // browserMsg is a message from a browser (same shape as teleclaude's web UI sends).
 type browserMsg struct {
-	Type   string          `json:"type"`
-	Text   string          `json:"text"`
-	ID     string          `json:"id,omitempty"`
-	Title  string          `json:"title,omitempty"`
-	Path   string          `json:"path,omitempty"`
-	Target json.RawMessage `json:"target,omitempty"`
+	Type    string          `json:"type"`
+	Text    string          `json:"text"`
+	Kind    string          `json:"kind,omitempty"`
+	ID      string          `json:"id,omitempty"`
+	Title   string          `json:"title,omitempty"`
+	Path    string          `json:"path,omitempty"`
+	Backend string          `json:"backend,omitempty"`
+	Target  json.RawMessage `json:"target,omitempty"`
 }
 
 func (s *browserServer) tokenOK(r *http.Request) bool {
@@ -168,6 +170,8 @@ func (s *browserServer) handleWS(w http.ResponseWriter, r *http.Request) {
 			_ = s.control.send(controlIn{Type: "web_rename", ID: m.ID, Title: m.Title, Origin: "web"})
 		case "web_delete":
 			_ = s.control.send(controlIn{Type: "web_delete", ID: m.ID, Origin: "web"})
+		case "set_channel_backend":
+			_ = s.control.send(buildSetChannelBackendControlIn(m.Kind, m.ID, m.Backend))
 		}
 	}
 	cancel()
@@ -206,6 +210,37 @@ func buildSendControlIn(text string, target json.RawMessage) (controlIn, bool) {
 		m.Type = "send_text"
 	}
 	return m, true
+}
+
+func buildSetChannelBackendControlIn(kind, id, backend string) controlIn {
+	if kind == "" {
+		if id != "" {
+			kind = "web"
+		} else {
+			kind = "telegram"
+		}
+	}
+	target := map[string]string{"kind": kind}
+	if id != "" {
+		target["id"] = id
+	}
+	tgt, _ := json.Marshal(target)
+	return controlIn{
+		Type:    "set_channel_backend",
+		Origin:  "web",
+		Target:  json.RawMessage(tgt),
+		Backend: backend,
+	}
+}
+
+func buildUploadControlIn(path, caption string, target json.RawMessage) controlIn {
+	return controlIn{
+		Type:    "upload_attachment",
+		Path:    path,
+		Caption: caption,
+		Origin:  "web",
+		Target:  target,
+	}
 }
 
 func (s *browserServer) handleConversations(w http.ResponseWriter, r *http.Request) {
@@ -289,6 +324,37 @@ func (s *browserServer) handleWebconvRename(w http.ResponseWriter, r *http.Reque
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	_, _ = w.Write(data)
+}
+
+func (s *browserServer) handleChannelBackend(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut || !s.authOK(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	var body struct {
+		Kind    string `json:"kind"`
+		ID      string `json:"id"`
+		Backend string `json:"backend"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	data, err := s.control.request(buildSetChannelBackendControlIn(body.Kind, body.ID, body.Backend))
+	if err != nil {
+		http.Error(w, "control API error", http.StatusBadGateway)
+		return
+	}
+	var m struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error"`
+	}
+	_ = json.Unmarshal(data, &m)
+	if m.OK {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	http.Error(w, m.Error, http.StatusBadRequest)
 }
 
 // --- Admin endpoints (proxied to teleclaude via the control API) -------------
@@ -482,7 +548,11 @@ func (s *browserServer) handleUpload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "write failed", http.StatusInternalServerError)
 		return
 	}
-	if err := s.control.send(controlIn{Type: "upload_attachment", Path: savePath, Caption: r.FormValue("caption"), Origin: "web"}); err != nil {
+	var target json.RawMessage
+	if raw := strings.TrimSpace(r.FormValue("target")); raw != "" {
+		target = json.RawMessage(raw)
+	}
+	if err := s.control.send(buildUploadControlIn(savePath, r.FormValue("caption"), target)); err != nil {
 		http.Error(w, "control send failed", http.StatusBadGateway)
 		return
 	}
@@ -534,6 +604,7 @@ func (s *browserServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/api/workers", s.handleWorkers)
 	mux.HandleFunc("/api/history", s.handleHistory)
 	mux.HandleFunc("/api/webconv/rename", s.handleWebconvRename)
+	mux.HandleFunc("/api/channel/backend", s.handleChannelBackend)
 	mux.HandleFunc("/api/upload", s.handleUpload)
 	mux.HandleFunc("/api/capabilities", s.handleCapabilities)
 	mux.HandleFunc("/api/version", s.handleVersion)

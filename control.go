@@ -55,6 +55,7 @@ type controlIn struct {
 	Caption string          `json:"caption,omitempty"`
 	ID      string          `json:"id,omitempty"`
 	Title   string          `json:"title,omitempty"`
+	Backend string          `json:"backend,omitempty"`
 	Target  json.RawMessage `json:"target,omitempty"`
 	Body    string          `json:"body,omitempty"` // set_config: edited config.yaml text
 }
