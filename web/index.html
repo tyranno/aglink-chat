@@ -48,17 +48,32 @@
       </form>
     </section>
   </div>
-  <div id="config-overlay" class="overlay" hidden>
-    <div class="panel">
-      <div class="panel-head"><span>config.yaml</span><button type="button" id="config-close" class="icon-button" title="닫기" aria-label="닫기">✕</button></div>
-      <textarea id="config-text" spellcheck="false"></textarea>
-      <div class="panel-foot"><span id="config-msg"></span><button type="button" id="config-save">저장 (핫리로드)</button></div>
+  <div id="settings-view" hidden>
+    <div class="settings-topbar">
+      <button type="button" id="settings-back" class="icon-button" title="채팅으로 돌아가기" aria-label="채팅으로">←</button>
+      <span class="settings-title">설정</span>
+      <div class="settings-tabs">
+        <button type="button" class="settings-tab" data-tab="config">설정</button>
+        <button type="button" class="settings-tab" data-tab="conn">연결 / aglink</button>
+      </div>
     </div>
-  </div>
-  <div id="conn-overlay" class="overlay" hidden>
-    <div class="panel">
-      <div class="panel-head"><span>연결 / aglink 연동</span><button type="button" id="conn-close" class="icon-button" title="닫기" aria-label="닫기">✕</button></div>
-      <div id="conn-body" class="conn-body"></div>
+    <div class="settings-body">
+      <div id="settings-tab-config" class="settings-tab-panel">
+        <div id="settings-form" class="settings-form"></div>
+        <div class="settings-form-foot">
+          <span id="settings-msg"></span>
+          <button type="button" id="settings-save">변경사항 저장</button>
+        </div>
+        <details class="settings-raw">
+          <summary>고급: 설정 파일 직접 편집 (raw)</summary>
+          <p class="settings-raw-note">config.yaml 원문입니다. 구조화 폼에 없는 항목(비밀값·허용자 목록 등)이나 주석 보존이 필요할 때만 사용하세요.</p>
+          <textarea id="config-text" spellcheck="false"></textarea>
+          <div class="panel-foot"><span id="config-msg"></span><button type="button" id="config-save">raw 저장 (핫리로드)</button></div>
+        </details>
+      </div>
+      <div id="settings-tab-conn" class="settings-tab-panel" hidden>
+        <div id="conn-body" class="conn-body"></div>
+      </div>
     </div>
   </div>
   <div id="dialog-overlay" class="overlay" hidden>

@@ -33,10 +33,11 @@
   const backendBadge = document.getElementById("backend-badge");
   const btnConfig = document.getElementById("btn-config");
   const btnConnections = document.getElementById("btn-connections");
-  const configOverlay = document.getElementById("config-overlay");
+  const settingsView = document.getElementById("settings-view");
+  const settingsForm = document.getElementById("settings-form");
+  const settingsMsg = document.getElementById("settings-msg");
   const configText = document.getElementById("config-text");
   const configMsg = document.getElementById("config-msg");
-  const connOverlay = document.getElementById("conn-overlay");
   const connBody = document.getElementById("conn-body");
   const dialogOverlay = document.getElementById("dialog-overlay");
   const dialogTitle = document.getElementById("dialog-title");
@@ -325,11 +326,9 @@
     });
   }
 
-  // Esc closes the admin panels (config / connections) and any open dialog.
+  // Esc closes any open dialog.
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;
-    if (configOverlay) configOverlay.hidden = true;
-    if (connOverlay) connOverlay.hidden = true;
     if (dialogCancel) dialogCancel();
   });
 
@@ -894,14 +893,115 @@
   // Telegram); the header trigger button was removed per feedback — it is a
   // dev-time action, not needed in normal use.
 
-  async function openConfig() {
-    if (!configOverlay) return;
+  // --- /setting view: client-side route + tabs -----------------------------
+  // /setting shows the settings view (tabs) instead of the chat shell; replaces
+  // the old config/connection popups. URL stays /setting via the History API.
+  let currentSettingsTab = "config";
+
+  function renderRoute() {
+    const onSettings = location.pathname === "/setting";
+    if (shell) shell.style.display = onSettings ? "none" : "";
+    if (settingsView) settingsView.hidden = !onSettings;
+    if (onSettings) loadSettingsTab(currentSettingsTab);
+  }
+  function navigate(path, tab) {
+    if (tab) currentSettingsTab = tab;
+    if (location.pathname !== path) history.pushState({}, "", path);
+    renderRoute();
+  }
+  window.addEventListener("popstate", renderRoute);
+
+  function loadSettingsTab(tab) {
+    currentSettingsTab = tab;
+    document.querySelectorAll(".settings-tab").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
+    const cfgPanel = document.getElementById("settings-tab-config");
+    const connPanel = document.getElementById("settings-tab-conn");
+    if (cfgPanel) cfgPanel.hidden = tab !== "config";
+    if (connPanel) connPanel.hidden = tab !== "conn";
+    if (tab === "config") { loadSettingsForm(); loadRawConfig(); }
+    else { renderConnBody(); }
+  }
+  document.querySelectorAll(".settings-tab").forEach((b) => b.addEventListener("click", () => loadSettingsTab(b.dataset.tab)));
+  const settingsBack = document.getElementById("settings-back");
+  if (settingsBack) settingsBack.addEventListener("click", () => navigate("/", null));
+  if (btnConfig) btnConfig.addEventListener("click", () => navigate("/setting", "config"));
+  if (btnConnections) btnConnections.addEventListener("click", () => navigate("/setting", "conn"));
+
+  // --- Structured settings form (GET/PUT /api/settings) --------------------
+  let settingsFields = []; // { key, type, el, orig }
+  function fieldValue(rec) {
+    if (rec.type === "bool") return rec.el.checked;
+    if (rec.type === "int") return rec.el.value === "" ? 0 : parseInt(rec.el.value, 10);
+    return rec.el.value;
+  }
+  function buildSettingRow(f) {
+    const row = document.createElement("div"); row.className = "settings-row";
+    const head = document.createElement("div"); head.className = "settings-row-head";
+    const label = document.createElement("span"); label.className = "settings-label"; label.textContent = f.label;
+    let el;
+    if (f.type === "bool") {
+      el = document.createElement("input"); el.type = "checkbox"; el.checked = !!f.value;
+    } else if (f.type === "select") {
+      el = document.createElement("select");
+      for (const opt of (f.options || [])) {
+        const o = document.createElement("option"); o.value = opt; o.textContent = opt;
+        if (opt === f.value) o.selected = true;
+        el.appendChild(o);
+      }
+    } else {
+      el = document.createElement("input");
+      el.type = f.type === "int" ? "number" : "text";
+      el.value = f.value == null ? "" : String(f.value);
+    }
+    el.className = "settings-input";
+    head.append(label, el);
+    row.appendChild(head);
+    if (f.desc) { const d = document.createElement("div"); d.className = "settings-desc"; d.textContent = f.desc; row.appendChild(d); }
+    settingsFields.push({ key: f.key, type: f.type, el, orig: f.value });
+    return row;
+  }
+  async function loadSettingsForm() {
+    if (!settingsForm) return;
+    settingsForm.replaceChildren();
+    settingsFields = [];
+    if (settingsMsg) settingsMsg.textContent = "";
+    let data = { sections: [] };
+    try { const r = await fetch("/api/settings", { headers: authHeaders }); if (r.ok) data = await r.json(); } catch (e) { /* empty */ }
+    for (const section of (data.sections || [])) {
+      const h = document.createElement("div"); h.className = "settings-section-title"; h.textContent = section.title;
+      settingsForm.appendChild(h);
+      for (const f of (section.fields || [])) settingsForm.appendChild(buildSettingRow(f));
+    }
+    if (settingsFields.length === 0) {
+      const e = document.createElement("div"); e.className = "settings-desc"; e.textContent = "설정을 불러오지 못했습니다.";
+      settingsForm.appendChild(e);
+    }
+  }
+  async function saveSettings() {
+    const updates = {};
+    for (const rec of settingsFields) {
+      const val = fieldValue(rec);
+      if (String(val) !== String(rec.orig)) updates[rec.key] = val;
+    }
+    if (Object.keys(updates).length === 0) { if (settingsMsg) settingsMsg.textContent = "변경된 항목이 없습니다."; return; }
+    if (settingsMsg) settingsMsg.textContent = "저장 중…";
+    try {
+      const r = await fetch("/api/settings", { method: "PUT", headers: { ...authHeaders, "Content-Type": "application/json" }, body: JSON.stringify(updates) });
+      if (r.status === 204) { if (settingsMsg) settingsMsg.textContent = "저장됨 — 핫리로드 적용 (주소·기동 항목은 재시작 필요)"; loadSettingsForm(); }
+      else { const t = await r.text(); if (settingsMsg) settingsMsg.textContent = "실패: " + t; }
+    } catch (e) { if (settingsMsg) settingsMsg.textContent = "오류: " + e; }
+  }
+  const settingsSaveBtn = document.getElementById("settings-save");
+  if (settingsSaveBtn) settingsSaveBtn.addEventListener("click", saveSettings);
+
+  // --- Raw config editor (advanced; edits the file text directly) ----------
+  async function loadRawConfig() {
+    if (!configText) return;
     if (configMsg) configMsg.textContent = "";
     try {
       const resp = await fetch("/api/config", { headers: authHeaders });
       configText.value = resp.ok ? await resp.text() : "(불러오기 실패: " + resp.status + ")";
     } catch (e) { configText.value = "(불러오기 오류)"; }
-    configOverlay.hidden = false;
   }
   async function saveConfig() {
     if (configMsg) configMsg.textContent = "저장 중…";
@@ -911,13 +1011,10 @@
       else { const t = await resp.text(); if (configMsg) configMsg.textContent = "실패: " + t; }
     } catch (e) { if (configMsg) configMsg.textContent = "오류: " + e; }
   }
-  if (btnConfig) btnConfig.addEventListener("click", openConfig);
-  const configCloseBtn = document.getElementById("config-close");
-  if (configCloseBtn) configCloseBtn.addEventListener("click", () => { configOverlay.hidden = true; });
   const configSaveBtn = document.getElementById("config-save");
   if (configSaveBtn) configSaveBtn.addEventListener("click", saveConfig);
-  if (configOverlay) configOverlay.addEventListener("click", (e) => { if (e.target === configOverlay) configOverlay.hidden = true; });
 
+  // --- Connections / aglink status tab -------------------------------------
   function connHeading(text) {
     const h = document.createElement("div");
     h.className = "conn-heading";
@@ -935,8 +1032,8 @@
     const n = document.createElement("div"); n.className = "conn-note"; n.textContent = text;
     return n;
   }
-  async function openConnections() {
-    if (!connOverlay || !connBody) return;
+  async function renderConnBody() {
+    if (!connBody) return;
     connBody.replaceChildren();
     let data = {};
     try { const resp = await fetch("/api/status", { headers: authHeaders }); if (resp.ok) data = await resp.json(); } catch (e) { /* show defaults */ }
@@ -986,17 +1083,12 @@
       }
       connBody.appendChild(connNote("미사용은 정상입니다 (필요할 때만 실행) — 설치 안 됨만 조치가 필요합니다."));
     }
-
-    connBody.appendChild(connNote("주소/포트 변경은 ⚙ 설정에서 config.yaml을 편집한 뒤 재시작하세요."));
-    connOverlay.hidden = false;
+    connBody.appendChild(connNote("주소/포트 변경은 「설정」 탭에서 바꾼 뒤 저장하세요 (일부는 재시작 필요)."));
   }
-  if (btnConnections) btnConnections.addEventListener("click", openConnections);
-  const connCloseBtn = document.getElementById("conn-close");
-  if (connCloseBtn) connCloseBtn.addEventListener("click", () => { connOverlay.hidden = true; });
-  if (connOverlay) connOverlay.addEventListener("click", (e) => { if (e.target === connOverlay) connOverlay.hidden = true; });
 
   resizeInput();
   bootstrapCapabilities();
+  renderRoute(); // honor a direct /setting load
   loadConversations();
   connect();
 })();
